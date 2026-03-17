@@ -234,3 +234,115 @@ app.listen(PORT, () => {
   console.log(`Plaid environment: ${process.env.PLAID_ENV}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
 });
+
+/* ── Bank Connect Page ────────────────────────
+   Served as a regular webpage (not extension page)
+   so Plaid Link CDN script loads without CSP issues
+────────────────────────────────────────────── */
+app.get('/connect', (req, res) => {
+  const { user_id = 'user_1', api_secret } = req.query;
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>BillConcierge — Connect Bank</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0d0d0d;color:#f0f0f0;font-family:system-ui,sans-serif;
+      min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{background:#161616;border:1px solid #2a2a2a;border-radius:16px;
+      padding:40px;width:100%;max-width:420px;text-align:center}
+    .icon{width:56px;height:56px;background:#c8f560;border-radius:14px;
+      display:flex;align-items:center;justify-content:center;margin:0 auto 20px}
+    h1{font-size:22px;font-weight:700;margin-bottom:8px}
+    p{font-size:14px;color:#888;margin-bottom:28px;line-height:1.6}
+    .btn{width:100%;padding:14px;border-radius:10px;border:none;cursor:pointer;
+      font-size:15px;font-weight:700;font-family:inherit;transition:all .15s}
+    .btn-primary{background:#c8f560;color:#0d0d0d}
+    .btn-primary:hover{background:#a8d44a}
+    .btn-primary:disabled{opacity:.4;cursor:not-allowed}
+    .status{padding:14px;border-radius:10px;font-size:13px;margin-bottom:20px;
+      text-align:left;line-height:1.6;display:none}
+    .info{background:rgba(200,245,96,.08);border:1px solid rgba(200,245,96,.2);color:#c8f560}
+    .error{background:rgba(255,95,95,.08);border:1px solid rgba(255,95,95,.3);color:#ff5f5f}
+    .success{background:rgba(200,245,96,.12);border:1px solid rgba(200,245,96,.3);color:#c8f560}
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">
+    <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="#0d0d0d"
+      stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="2" width="12" height="14" rx="2"/>
+      <line x1="5" y1="6" x2="11" y2="6"/>
+      <line x1="5" y1="9" x2="11" y2="9"/>
+      <line x1="5" y1="12" x2="8" y2="12"/>
+    </svg>
+  </div>
+  <h1>Connect your bank</h1>
+  <p>Securely link your bank via Plaid to detect recurring payments automatically. Your credentials never touch BillConcierge.</p>
+  <div class="status" id="status"></div>
+  <button class="btn btn-primary" id="connect-btn" onclick="startLink()">Connect bank account</button>
+</div>
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script>
+  const userId    = ${JSON.stringify(user_id)};
+  const apiSecret = ${JSON.stringify(api_secret || '')};
+  const serverUrl = window.location.origin;
+
+  function showStatus(type, msg) {
+    const el = document.getElementById('status');
+    el.className = 'status ' + type;
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  async function api(method, path, body) {
+    const opts = {
+      method,
+      headers: { 'Content-Type': 'application/json', 'x-api-secret': apiSecret }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res  = await fetch(serverUrl + path, opts);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.details || data.error || 'Server error');
+    return data;
+  }
+
+  async function startLink() {
+    document.getElementById('connect-btn').disabled = true;
+    showStatus('info', 'Connecting to server...');
+    try {
+      const { link_token } = await api('POST', '/create-link-token', { user_id: userId });
+      showStatus('info', 'Opening Plaid — log in to your bank...');
+
+      const handler = Plaid.create({
+        token: link_token,
+        onSuccess: async (public_token) => {
+          showStatus('info', 'Bank connected! Exchanging tokens...');
+          try {
+            await api('POST', '/exchange-token', { public_token, user_id: userId });
+            showStatus('success', 'Bank linked successfully! You can close this tab and go back to the BillConcierge dashboard to fetch your transactions.');
+            document.getElementById('connect-btn').style.display = 'none';
+          } catch(e) {
+            showStatus('error', 'Token exchange failed: ' + e.message);
+            document.getElementById('connect-btn').disabled = false;
+          }
+        },
+        onExit: (err) => {
+          document.getElementById('connect-btn').disabled = false;
+          if (err) showStatus('error', err.display_message || err.error_message || 'Plaid exited with error');
+          else showStatus('info', 'Cancelled. Click the button to try again.');
+        }
+      });
+      handler.open();
+    } catch(e) {
+      showStatus('error', 'Error: ' + e.message);
+      document.getElementById('connect-btn').disabled = false;
+    }
+  }
+</script>
+</body>
+</html>`);
+});
