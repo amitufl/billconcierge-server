@@ -82,11 +82,16 @@ app.post('/store-token', requireSecret, async (req, res) => {
   if (!access_token || !user_id)
     return res.status(400).json({ error: 'access_token and user_id required' });
 
-  // Fetch the institution name from Teller for display
+  // Fetch the institution name + account types for display
   let bank_name = 'Bank account';
   try {
     const accounts = await tellerRequest('GET', '/accounts', access_token);
-    bank_name = accounts?.[0]?.institution?.name || 'Bank account';
+    const instName = accounts?.[0]?.institution?.name || 'Bank account';
+    const hasCredit = accounts.some(a => (a.type || '').toLowerCase() === 'credit');
+    const hasDeposit = accounts.some(a => (a.type || '').toLowerCase() === 'depository');
+    if (hasCredit && hasDeposit) bank_name = instName + ' (Checking + Credit)';
+    else if (hasCredit)          bank_name = instName + ' (Credit Card)';
+    else                         bank_name = instName;
   } catch (e) { console.warn('Could not fetch institution name:', e.message); }
 
   const accts = getAccounts(String(user_id));
@@ -132,14 +137,29 @@ app.get('/transactions', requireSecret, async (req, res) => {
   try {
     const results = await Promise.all(targets.map(async (acct) => {
       const accounts  = await tellerRequest('GET', '/accounts', acct.access_token);
+
+      // Fetch per-account transactions, preserving account type
       const txnArrays = await Promise.all(
-        accounts.map(a =>
-          tellerRequest('GET', `/accounts/${a.id}/transactions`, acct.access_token).catch(() => [])
-        )
+        accounts.map(async a => {
+          const txns = await tellerRequest('GET', `/accounts/${a.id}/transactions`, acct.access_token).catch(() => []);
+          // Tag each transaction with its account type so we apply the right sign filter
+          return txns.map(t => ({ ...t, _account_type: a.type, _account_subtype: a.subtype }));
+        })
       );
+
       const raw  = txnArrays.flat();
+
       const txns = raw
-        .filter(t => parseFloat(t.amount) < 0 && t.status !== 'pending')
+        .filter(t => {
+          if (t.status === 'pending') return false;
+          const amt  = parseFloat(t.amount);
+          const type = (t._account_type || '').toLowerCase();
+
+          // Credit card accounts: positive = charge (money you owe = expense)
+          // Depository/checking accounts: negative = debit (money leaving = expense)
+          if (type === 'credit') return amt > 0;
+          return amt < 0;
+        })
         .map(t => ({
           transaction_id: t.id,
           date:           t.date,
@@ -148,10 +168,12 @@ app.get('/transactions', requireSecret, async (req, res) => {
           amount:         Math.abs(parseFloat(t.amount)),
           currency:       'USD',
           category:       t.details?.category || null,
+          account_type:   t._account_type || 'depository',
           pending:        false,
           enrollment_id:  acct.enrollment_id,
           bank_name:      acct.bank_name,
         }));
+
       return { enrollment_id: acct.enrollment_id, bank_name: acct.bank_name, transactions: txns };
     }));
 
