@@ -1,16 +1,16 @@
 {
   "name": "billconcierge-server",
-  "version": "1.0.0",
-  "description": "BillConcierge backend — Plaid integration + recurring payment detection",
+  "version": "2.0.0",
+  "description": "BillConcierge backend — Teller bank integration",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
   "dependencies": {
-    "plaid": "^20.0.0",
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2"
   }
 }
